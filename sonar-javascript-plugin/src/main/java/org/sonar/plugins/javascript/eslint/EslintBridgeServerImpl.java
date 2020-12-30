@@ -53,15 +53,16 @@ public class EslintBridgeServerImpl implements EslintBridgeServer {
   private static final Profiler PROFILER = Profiler.createIfDebug(LOG);
 
   private static final int DEFAULT_TIMEOUT_SECONDS = 60;
+  private static final String TIMEOUT_SECONDS_PROPERTY = "sonar.javascript.timeoutSeconds";
   // internal property to set "--max-old-space-size" for Node process running this server
   private static final String MAX_OLD_SPACE_SIZE_PROPERTY = "sonar.javascript.node.maxspace";
   private static final String ALLOW_TS_PARSER_JS_FILES = "sonar.javascript.allowTsParserJsFiles";
   private static final Gson GSON = new Gson();
   private static final int MIN_NODE_VERSION = 8;
 
-  private final OkHttpClient client;
+  private OkHttpClient client;
   private final NodeCommandBuilder nodeCommandBuilder;
-  private final int timeoutSeconds;
+  private int timeoutSeconds;
   private final Bundle bundle;
   private final String hostAddress;
   private int port;
@@ -73,21 +74,8 @@ public class EslintBridgeServerImpl implements EslintBridgeServer {
   // Used by pico container for dependency injection
   public EslintBridgeServerImpl(NodeCommandBuilder nodeCommandBuilder, Bundle bundle, RulesBundles rulesBundles,
     NodeDeprecationWarning deprecationWarning) {
-    this(nodeCommandBuilder, DEFAULT_TIMEOUT_SECONDS, bundle, rulesBundles, deprecationWarning);
-  }
-
-  EslintBridgeServerImpl(NodeCommandBuilder nodeCommandBuilder,
-    int timeoutSeconds,
-    Bundle bundle,
-    RulesBundles rulesBundles,
-    NodeDeprecationWarning deprecationWarning) {
     this.nodeCommandBuilder = nodeCommandBuilder;
-    this.timeoutSeconds = timeoutSeconds;
     this.bundle = bundle;
-    this.client = new OkHttpClient.Builder()
-      .callTimeout(Duration.ofSeconds(timeoutSeconds))
-      .readTimeout(Duration.ofSeconds(timeoutSeconds))
-      .build();
     this.rulesBundles = rulesBundles;
     this.deprecationWarning = deprecationWarning;
     this.hostAddress = InetAddress.getLoopbackAddress().getHostAddress();
@@ -103,6 +91,14 @@ public class EslintBridgeServerImpl implements EslintBridgeServer {
 
   void startServer(SensorContext context, List<Path> deployedBundles) throws IOException {
     PROFILER.startDebug("Starting server");
+
+    timeoutSeconds = context.config().getInt(TIMEOUT_SECONDS_PROPERTY).orElse(DEFAULT_TIMEOUT_SECONDS);
+
+    client = new OkHttpClient.Builder()
+      .callTimeout(Duration.ofSeconds(timeoutSeconds))
+      .readTimeout(Duration.ofSeconds(timeoutSeconds))
+      .build();
+
     port = findOpenPort();
 
     File scriptFile = new File(bundle.startServerScript());
@@ -218,8 +214,9 @@ public class EslintBridgeServerImpl implements EslintBridgeServer {
       // in this case response.body() is never null (according to docs)
       return response.body().string();
     } catch (InterruptedIOException e) {
-      String msg = "eslint-bridge Node.js process is unresponsive. This is most likely caused by process running out of memory." +
-        " Consider setting sonar.javascript.node.maxspace to higher value (e.g. 4096).";
+      String msg = "eslint-bridge Node.js process is unresponsive. This is most likely caused by process running out " +
+        "of memory or taking too much time. Consider increasing sonar.javascript.node.maxspace (e.g. 4096) or " +
+        "sonar.javascript.timeoutSeconds (e.g. 120).";
       LOG.error(msg);
       throw new IllegalStateException("eslint-bridge is unresponsive", e);
     }
